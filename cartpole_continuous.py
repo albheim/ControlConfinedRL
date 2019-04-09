@@ -89,7 +89,8 @@ class ContinuousCartPoleEnv(gym.Env):
         return [seed]
 
     def step(self, action):
-        assert self.action_space.contains(action), "%r (%s) invalid"%(action, type(action))
+        # assert self.action_space.contains(action), "%r (%s) invalid"%(action, type(action))
+        action = action[0]
         state = self.state
         x, x_dot, theta, theta_dot = state
         force = self.force_mag * action
@@ -131,8 +132,8 @@ class ContinuousCartPoleEnv(gym.Env):
 
         return np.array(self.state), reward, done, {}
 
-    def reset(self):
-        self.state = self.np_random.uniform(low=-0.5, high=0.5, size=(4,))
+    def reset(self, d=0.5):
+        self.state = self.np_random.uniform(low=-d, high=d, size=(4,))
         self.steps_beyond_done = None
         return np.array(self.state)
 
