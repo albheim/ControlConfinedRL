@@ -72,8 +72,7 @@ def run_episode(env, control, n_episodes, show_episode=False,
 
     return starting_pos
 
-env = ContinuousCartPoleEnv()
-
-control = ControlPolicy(env)
-
-A = run_episode(env, control, 100000)
+if __name__ == '__main__':
+    env = ContinuousCartPoleEnv()
+    control = ControlPolicy(env)
+    A = run_episode(env, control, 100000)
