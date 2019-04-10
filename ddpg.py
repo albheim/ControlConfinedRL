@@ -112,81 +112,87 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def test_agent(n=5):
         for j in range(n):
-            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-            while not(d or (ep_len == max_ep_len)):
+            o, r, d, ep_ret, ep_len, ep_cost = test_env.reset(), 0, False, 0, 0, 0
+            while not (d or (ep_len == 5*max_ep_len)):
                 # Take deterministic actions at test time (noise_scale=0)
                 test_env.render()
-                o, r, d, _ = test_env.step(get_action(o, 0))
-                ep_ret += r
+                a = get_action(o, 0)
+                o, r, d, _, c = test_env.step(a + 0.5 * np.random.rand())
+                ep_ret += (r - c)
                 ep_len += 1
+                ep_cost += c
         test_env.close()
-        print("\n avg reward {} and episode length {} over {} trials".format(ep_ret/n, ep_len/5, n))
+        print("\n avg reward {} and episode length {} over {} trials, cost/step {}".
+              format(ep_ret/n, ep_len/n, n, ep_cost / ep_len))
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
 
     for t in range(start_steps):
         a = env.action_space.sample()
-        o2, r, d, _ = env.step(a)
+        o2, r, d, _, c = env.step(a)
+        r -= c
         replay_buffer.store(o, a, r, o2, d)
         o = o2
         if d:
             o = env.reset()
 
+    fails = 0
+
     # Main loop: collect experience in env and update/log each epoch
-    for i in range(n_episodes):
-        for t in itertools.count():
+    for t in itertools.count():
+        """
+        Until start_steps have elapsed, randomly sample actions
+        from a uniform distribution for better exploration. Afterwards,
+        use the learned policy (with some noise, via act_noise).
+        """
+        a = get_action(o, act_noise)
+
+        # Step the env
+        o2, r, d, _, c = env.step(a)
+        r -= c
+        ep_ret += r
+        ep_len += 1
+
+        # Ignore the "done" signal if it comes from hitting the time
+        # horizon (that is, when it's an artificial terminal signal
+        # that isn't based on the agent's state)
+        d = False if t==max_ep_len else d
+
+        # Store experience to replay buffer
+        replay_buffer.store(o, a, r, o2, d)
+
+        # Super critical, easy to overlook step: make sure to update
+        # most recent observation!
+        o = o2
+
+        print("\rSteps {:3}, fails {}".format(t, fails), end="")
+
+        if t%max_ep_len == 0:
             """
-            Until start_steps have elapsed, randomly sample actions
-            from a uniform distribution for better exploration. Afterwards,
-            use the learned policy (with some noise, via act_noise).
+            Perform all DDPG updates at the end of the trajectory,
+            in accordance with tuning done by TD3 paper authors.
             """
-            a = get_action(o, act_noise)
+            for _ in range(max_ep_len):
+                batch = replay_buffer.sample_batch(batch_size)
+                feed_dict = {x_ph: batch['obs1'],
+                            x2_ph: batch['obs2'],
+                            a_ph: batch['acts'],
+                            r_ph: batch['rews'],
+                            d_ph: batch['done']
+                            }
 
-            # Step the env
-            o2, r, d, _ = env.step(a)
-            ep_ret += r
-            ep_len += 1
+                # Q-learning update
+                outs = sess.run([q_loss, q, train_q_op], feed_dict)
 
-            # Ignore the "done" signal if it comes from hitting the time
-            # horizon (that is, when it's an artificial terminal signal
-            # that isn't based on the agent's state)
-            d = False if t==max_ep_len else d
+                # Policy update
+                outs = sess.run([pi_loss, train_pi_op, target_update], feed_dict)
+        if d:
+            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            fails += 1
 
-            # Store experience to replay buffer
-            replay_buffer.store(o, a, r, o2, d)
-
-            # Super critical, easy to overlook step: make sure to update
-            # most recent observation!
-            o = o2
-
-            print("\rEpisode {:4} @ Step {:3}".format(i, t), end="")
-
-            if d or t==max_ep_len:
-                """
-                Perform all DDPG updates at the end of the trajectory,
-                in accordance with tuning done by TD3 paper authors.
-                """
-                for _ in range(t):
-                    batch = replay_buffer.sample_batch(batch_size)
-                    feed_dict = {x_ph: batch['obs1'],
-                                x2_ph: batch['obs2'],
-                                a_ph: batch['acts'],
-                                r_ph: batch['rews'],
-                                d_ph: batch['done']
-                                }
-
-                    # Q-learning update
-                    outs = sess.run([q_loss, q, train_q_op], feed_dict)
-
-                    # Policy update
-                    outs = sess.run([pi_loss, train_pi_op, target_update], feed_dict)
-
-                o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-                break
-
-        # End of epoch wrap-up
-        if i > 0 and i % show_steps == 0:
+    # End of epoch wrap-up
+        if t > 0 and t % (show_steps * max_ep_len) == 0:
             # Test the performance of the deterministic version of the agent.
             test_agent()
 

@@ -84,6 +84,10 @@ class ContinuousCartPoleEnv(gym.Env):
 
         self.steps_beyond_done = None
 
+        scaler = 100
+        self.Q = np.diag([10, 1, 10, 1]) / scaler
+        self.R = 10 / scaler
+
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
@@ -116,6 +120,10 @@ class ContinuousCartPoleEnv(gym.Env):
                 or theta > self.theta_threshold_radians
         done = bool(done)
 
+        state = np.array(self.state)
+
+        cost = state.dot(self.Q).dot(state) + self.R * action**2
+
         if not done:
             reward = 1.0
         elif self.steps_beyond_done is None:
@@ -128,9 +136,7 @@ class ContinuousCartPoleEnv(gym.Env):
             self.steps_beyond_done += 1
             reward = 0.0
 
-        reward -= action**2
-
-        return np.array(self.state), reward, done, {}
+        return state, reward, done, {}, cost
 
     def reset(self, d=0.5):
         self.state = self.np_random.uniform(low=-d, high=d, size=(4,))
