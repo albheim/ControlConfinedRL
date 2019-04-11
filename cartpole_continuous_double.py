@@ -89,14 +89,14 @@ class ContinuousCartPoleEnv(gym.Env):
         self.R = 10 / scaler
 
         # Load disturbance applied over duration
-        self.disturbance_prob = 0.01
+        self.disturbance_prob = 0.0#1
         self.disturbance_max_time = 0.4
         self.disturbance_count = 0
         self.disturbance_max_val = 1
         self.disturbance = 0
 
         # Noise
-        self.noise = 0.1
+        self.noise = 0.0#5
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -161,7 +161,7 @@ class ContinuousCartPoleEnv(gym.Env):
                                "disturbance": self.disturbance,
                                "cost": cost})
 
-    def reset(self, d=0.5):
+    def reset(self, d=0.4):
         self.state[0] = self.np_random.uniform(low=-d, high=d, size=(4,))
         self.state[1] = np.array(self.state[0])
         self.steps_beyond_done = None

@@ -140,7 +140,8 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     o_ctrl = np.array(o)#env.state[0]
 
     for t in range(start_steps):
-        a = env.action_space.sample()
+        #a = env.action_space.sample()
+        a = np.array([ctrl_pol.predict(o)])
         o2, r, d, info = env.step(a, 1)
         r -= info["cost"]
         replay_buffer.store(o, a, r, o2, d)
@@ -158,9 +159,11 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     fig, ax = plt.subplots()
     plot = ax.scatter([], [])
     plot_ctrl = ax.scatter([], [])
-    ax.legend(["ddpg", "lqr"])
+    plot_act = ax.scatter([], [])
+    plot_ctrl_act = ax.scatter([], [])
+    ax.legend(["ddpg cost", "lqr cost", "ddpg a", "lqr a"])
     ax.set_xlabel("time")
-    ax.set_ylabel("cost")
+    ax.set_ylabel("cost and action")
     ax.set_ylim(0, 3)
 
     # Main loop: collect experience in env and update/log each epoch
@@ -170,6 +173,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         from a uniform distribution for better exploration. Afterwards,
         use the learned policy (with some noise, via act_noise).
         """
+        env.render(takeover=takeover)
 
         # Step lqr
         a_ctrl = np.array([ctrl_pol.predict(o_ctrl)])
@@ -177,7 +181,11 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         cost_ctrl += info["cost"]
 
         # Step ddpg
-        a = get_action(o, act_noise)
+        takeover = np.abs(o[2]) > 0.1 or np.abs(o[0]) > 0.5
+        if takeover:
+            a = np.array([ctrl_pol.predict(o)])
+        else:
+            a = get_action(o, act_noise)
         o2, r, d, info = env.step(a, 1)
 
         cost += info["cost"]
@@ -231,6 +239,16 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             array = plot_ctrl.get_offsets()
             array = np.append(array, point, axis=0)
             plot_ctrl.set_offsets(array)
+
+            point = np.array([0.02 * (t + start_steps), np.abs(a_ctrl)]).reshape((1, 2))
+            array = plot_act.get_offsets()
+            array = np.append(array, point, axis=0)
+            plot_act.set_offsets(array)
+
+            point = np.array([0.02 * (t + start_steps), np.abs(a)]).reshape((1, 2))
+            array = plot_ctrl_act.get_offsets()
+            array = np.append(array, point, axis=0)
+            plot_ctrl_act.set_offsets(array)
 
             ax.set_xlim(0.02 * start_steps, 10 * np.ceil(0.002 * (t + start_steps + 1)))
             fig.canvas.draw()
