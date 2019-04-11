@@ -153,6 +153,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     takeover = False
     cost = 0
     cost_ctrl = 0
+    retrain_steps = 0
 
     # Setup plotting
     plt.ion()
@@ -181,7 +182,8 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         cost_ctrl += info["cost"]
 
         # Step ddpg
-        takeover = np.abs(o[2]) > 0.1 or np.abs(o[0]) > 0.5
+        scaler = 1 / (1 + np.exp(start_steps - t))
+        takeover = np.abs(o[2]) > 0.25 * scaler or np.abs(o[0]) > 1 * scaler
         if takeover:
             a = np.array([ctrl_pol.predict(o)])
         else:
@@ -192,6 +194,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         r -= info["cost"]
         ep_ret += r
         ep_len += 1
+        retrain_steps += 1
 
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
@@ -208,7 +211,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         print("\rSteps {:5}, fails {:3}, cost/step {:7.2}, ep_len {:5}, disturbance {:6.3}   "
               .format(t, fails, cost/(t % max_ep_len), ep_len, info["disturbance"] if info["push"] else 0.0), end="")
 
-        if t%max_ep_len == 0:
+        if np.random.rand() * max_ep_len < 1:
             """
             Perform all DDPG updates at the end of the trajectory,
             in accordance with tuning done by TD3 paper authors.
@@ -227,8 +230,8 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 # Policy update
                 outs = sess.run([pi_loss, train_pi_op, target_update], feed_dict)
 
-            cost /= max_ep_len
-            cost_ctrl /= max_ep_len
+            cost /= retrain_steps
+            cost_ctrl /= retrain_steps
 
             point = np.array([0.02 * (t + start_steps), cost]).reshape((1, 2))
             array = plot.get_offsets()
@@ -256,6 +259,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
             cost = 0
             cost_ctrl = 0
+            retrain_steps = 0
 
             env.state[0] = np.array(env.state[1])
             o_ctrl = env.state[0]
