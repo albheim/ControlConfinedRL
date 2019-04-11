@@ -34,10 +34,11 @@ class ControlPolicy:
 
         K, S, E = control.lqr(sys, Q, R)
         self.K = -K.reshape((4,))
+        self.lim = env.action_space.high[0]
 
     def predict(self, state):
         action = state.reshape((4,)).dot(self.K)
-        return action
+        return np.clip(action, -self.lim, self.lim)
 
 
 def run_episode(env, control, n_episodes, show_episode=False,
