@@ -197,7 +197,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # most recent observation!
         o = o2
 
-        print("\rSteps {:5}, fails {:3}, cost/step {:7.2}, ep_len {:5}, disturbance {:6.3}"
+        print("\rSteps {:5}, fails {:3}, cost/step {:7.2}, ep_len {:5}, disturbance {:6.3}   "
               .format(t, fails, cost/(t % max_ep_len), ep_len, info["disturbance"] if info["push"] else 0.0), end="")
 
         if t%max_ep_len == 0:

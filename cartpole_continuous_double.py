@@ -88,11 +88,15 @@ class ContinuousCartPoleEnv(gym.Env):
         self.Q = np.diag([10, 1, 10, 1]) / scaler
         self.R = 10 / scaler
 
+        # Load disturbance applied over duration
         self.disturbance_prob = 0.01
         self.disturbance_max_time = 0.4
         self.disturbance_count = 0
         self.disturbance_max_val = 1
         self.disturbance = 0
+
+        # Noise
+        self.noise = 0.1
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -152,9 +156,10 @@ class ContinuousCartPoleEnv(gym.Env):
                     logger.warn("you are calling 'step()' even though this environment has already returned done = true. you should always call 'reset()' once you receive 'done = true' -- any further steps are undefined behavior.")
                 self.steps_beyond_done += 1
 
-        return state, reward, done, {"push": push,
-                                    "disturbance": self.disturbance,
-                                    "cost": cost}
+        return (state + self.np_random.normal(scale=self.noise, size=state.shape),
+                reward, done, {"push": push,
+                               "disturbance": self.disturbance,
+                               "cost": cost})
 
     def reset(self, d=0.5):
         self.state[0] = self.np_random.uniform(low=-d, high=d, size=(4,))
