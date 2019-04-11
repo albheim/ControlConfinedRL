@@ -9,7 +9,6 @@ from core import get_vars
 from cartpole_continuous_double import ContinuousCartPoleEnv
 from lqr import ControlPolicy
 
-
 class ReplayBuffer:
     """
     A simple FIFO experience replay buffer for DDPG agents.
@@ -45,18 +44,20 @@ class ReplayBuffer:
 Deep Deterministic Policy Gradient (DDPG)
 
 """
-def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_critic,
-         ac_kwargs=dict(), seed=0,
-         replay_size=int(1e6), gamma=0.99,
-         polyak=0.995, pi_lr=1e-3, q_lr=1e-3, batch_size=100, start_steps=1000,
+def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
+         control_policy=ControlPolicy,
+         n_episodes=10000, replay_size=int(1e6), gamma=0.99, show_steps=50,
+         polyak=0.995, pi_lr=1e-3, q_lr=1e-3, batch_size=100, start_steps=10000,
          act_noise=0.1, max_ep_len=200, logger_kwargs=dict(), save_freq=1):
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
-    env = env_fn()
+    env, test_env = env_fn(), env_fn()
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
+
+    ctrl_pol = control_policy(env)
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
@@ -64,16 +65,12 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
     # Share information about action space with policy architecture
     ac_kwargs['action_space'] = env.action_space
 
-    # Control policy
-    ctrl_pol = control_policy(env)
-
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = core.placeholders(obs_dim, act_dim, obs_dim, None, None)
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
         pi, q, q_pi = actor_critic(x_ph, a_ph, **ac_kwargs)
-
 
     # Target networks
     with tf.variable_scope('target'):
@@ -107,7 +104,7 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
 
     # Initializing targets to match main variables
     target_init = tf.group([tf.assign(v_targ, v_main)
-                            for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
+                              for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
@@ -118,18 +115,45 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
         a += noise_scale * np.random.randn(act_dim)
         return np.clip(a, -act_limit, act_limit)
 
-    def stability_region(o):
-        #get_knn_avg(A, o, 10) > 0.5:
-        return np.abs(o[2]) < 0.25 and np.abs(o[0]) < 1
+    def test_agent(n=5):
+        tot_len, tot_ret = 0, 0
+        for j in range(n):
+            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
+            o_ctrl, cost_ctrl = np.array(o), 0
+            while not (d or (ep_len == 5*max_ep_len)):
+                # Take deterministic actions at test time (noise_scale=0)
+                test_env.render()
+                a_ctrl = np.array([ctrl_pol.predict(o_ctrl)])
+                o_ctrl, _, _, info = test_env.step(a_ctrl, 0)
+                cost_ctrl += info["cost"]
+                a = get_action(o, 0)
+                o, r, d, info = test_env.step(a, 1)
+                ep_ret += (r - info["cost"])
+                ep_len += 1
+            tot_len += ep_len
+            tot_ret += ep_ret
+        test_env.close()
+        print("\n avg reward {:.5} and episode length {} over {} trials, cost/step rl/lqr {:.5}/{:.5}".
+              format(tot_ret/n, tot_len/n, n, (tot_len - tot_ret) / tot_len, cost_ctrl / tot_len))
 
     o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-    o_ctrl = o
+    o_ctrl = np.array(o)#env.state[0]
 
-    takeover = 0
+    for t in range(start_steps):
+        a = env.action_space.sample()
+        o2, r, d, info = env.step(a, 1)
+        r -= info["cost"]
+        replay_buffer.store(o, a, r, o2, d)
+        o = o2
+        if d:
+            o = env.reset()
+
+    fails = 0
+    takeover = False
     cost = 0
     cost_ctrl = 0
-    total_fails = 0
 
+    # Setup plotting
     plt.ion()
     fig, ax = plt.subplots()
     plot = ax.scatter([], [])
@@ -137,7 +161,7 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
     ax.legend(["ddpg", "lqr"])
     ax.set_xlabel("time")
     ax.set_ylabel("cost")
-    ax.set_ylim(0, 300)
+    ax.set_ylim(0, 3)
 
     # Main loop: collect experience in env and update/log each epoch
     for t in itertools.count():
@@ -146,32 +170,25 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
         from a uniform distribution for better exploration. Afterwards,
         use the learned policy (with some noise, via act_noise).
         """
-        stab = stability_region(o)
-        a = get_action(o, act_noise / (1 + t / 10000))
-        a_cont = np.array([ctrl_pol.predict(o)])
-        if False:#(not stab) or takeover > 0:
-            a = a_cont
-            if stab:
-                takeover -= 1
-            else:
-                takeover = 20
-                print()
 
-        if t > start_steps and (t // 800) % 20 == 0:
-            env.render(takeover=takeover > 0)
+        # Step lqr
+        a_ctrl = np.array([ctrl_pol.predict(o_ctrl)])
+        o_ctrl, _, _, info = env.step(a_ctrl, 0)
+        cost_ctrl += info["cost"]
 
-        # Step the env
-        o2, r, d, _, c = env.step(a, 1)
-        cost += c
-        r -= c
-        # if takeover == 20:
-            # r -= (c + 10) # Should hurt compared to c and 10 if c is small.
-        #TODO punish reward if using lqr action
+        # Step ddpg
+        a = get_action(o, act_noise)
+        o2, r, d, info = env.step(a, 1)
+
+        cost += info["cost"]
+        r -= info["cost"]
         ep_ret += r
         ep_len += 1
 
-        o_ctrl, _, _, _, c = env.step(np.array([ctrl_pol.predict(o_ctrl)]), 0)
-        cost_ctrl += c
+        # Ignore the "done" signal if it comes from hitting the time
+        # horizon (that is, when it's an artificial terminal signal
+        # that isn't based on the agent's state)
+        d = False if t==max_ep_len else d
 
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
@@ -180,29 +197,21 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
         # most recent observation!
         o = o2
 
+        print("\rSteps {:5}, fails {:3}, cost/step {:7.2}, ep_len {:5}, disturbance {:6.3}"
+              .format(t, fails, cost/(t % max_ep_len), ep_len, info["disturbance"] if info["push"] else 0.0), end="")
 
-        print("\rStep {:7}, cost {}".format(t, cost), end="")
-
-        if d:
-            print("fail...")
-            total_fails += 1
-            env.reset()
-        if t > start_steps and t % max_ep_len == 0:
+        if t%max_ep_len == 0:
             """
             Perform all DDPG updates at the end of the trajectory,
             in accordance with tuning done by TD3 paper authors.
             """
-            # Copy state so we can compare
-            env.state[0] = np.array(env.state[1])
-
             for _ in range(max_ep_len):
                 batch = replay_buffer.sample_batch(batch_size)
                 feed_dict = {x_ph: batch['obs1'],
                              x2_ph: batch['obs2'],
                              a_ph: batch['acts'],
                              r_ph: batch['rews'],
-                             d_ph: batch['done']
-                             }
+                             d_ph: batch['done']}
 
                 # Q-learning update
                 outs = sess.run([q_loss, q, train_q_op], feed_dict)
@@ -210,30 +219,51 @@ def ddpg(env_fn, control_policy=ControlPolicy, actor_critic=core.mlp_actor_criti
                 # Policy update
                 outs = sess.run([pi_loss, train_pi_op, target_update], feed_dict)
 
-            # Plot costs
             cost /= max_ep_len
             cost_ctrl /= max_ep_len
 
-            point = np.array([0.02 * t, cost]).reshape((1, 2))
+            point = np.array([0.02 * (t + start_steps), cost]).reshape((1, 2))
             array = plot.get_offsets()
             array = np.append(array, point, axis=0)
             plot.set_offsets(array)
 
-            point = np.array([0.02 * t, cost_ctrl]).reshape((1, 2))
+            point = np.array([0.02 * (t + start_steps), cost_ctrl]).reshape((1, 2))
             array = plot_ctrl.get_offsets()
             array = np.append(array, point, axis=0)
             plot_ctrl.set_offsets(array)
 
-            ax.set_xlim(0.02 * start_steps, 10 * np.ceil(0.002 * (t + 1)))
+            ax.set_xlim(0.02 * start_steps, 10 * np.ceil(0.002 * (t + start_steps + 1)))
             fig.canvas.draw()
             plt.pause(0.005)
 
             cost = 0
             cost_ctrl = 0
 
+            env.state[0] = np.array(env.state[1])
+            o_ctrl = env.state[0]
+        if d:
+            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            o_ctrl = np.array(o)
+            fails += 1
+            print()
+
+    # End of epoch wrap-up
+        if t > 0 and t % (show_steps * max_ep_len) == 0:
+            # Test the performance of the deterministic version of the agent.
+            test_agent()
+
 
 if __name__ == '__main__':
-    ddpg(ContinuousCartPoleEnv, ControlPolicy,
-         actor_critic=core.mlp_actor_critic,
-         ac_kwargs=dict(hidden_sizes=[300]*1),
-         gamma=0.99, seed=0)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--hid', type=int, default=300)
+    parser.add_argument('--l', type=int, default=1)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--seed', '-s', type=int, default=0)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--exp_name', type=str, default='ddpg')
+    args = parser.parse_args()
+
+    ddpg(lambda : ContinuousCartPoleEnv(), actor_critic=core.mlp_actor_critic,
+         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
+         gamma=args.gamma, seed=args.seed)

@@ -84,9 +84,15 @@ class ContinuousCartPoleEnv(gym.Env):
 
         self.steps_beyond_done = None
 
-        scaler = 1000
+        scaler = 100.0
         self.Q = np.diag([10, 1, 10, 1]) / scaler
         self.R = 10 / scaler
+
+        self.disturbance_prob = 0.01
+        self.disturbance_max_time = 0.4
+        self.disturbance_count = 0
+        self.disturbance_max_val = 1
+        self.disturbance = 0
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -98,6 +104,15 @@ class ContinuousCartPoleEnv(gym.Env):
         state = self.state[idx]
         x, x_dot, theta, theta_dot = state
         force = self.force_mag * action
+        push = False
+        if self.disturbance_count > 0:
+            if idx == 1:
+                self.disturbance_count -= 1
+            force += self.disturbance
+            push = True
+        elif idx == 1 and self.np_random.rand() < self.disturbance_prob:
+            self.disturbance_count = self.disturbance_max_time / self.tau
+            self.disturbance = self.disturbance_max_val * 2 * (0.5 - self.np_random.rand())
         costheta = math.cos(theta)
         sintheta = math.sin(theta)
         temp = (force + self.polemass_length * theta_dot * theta_dot * sintheta) / self.total_mass
@@ -124,25 +139,28 @@ class ContinuousCartPoleEnv(gym.Env):
 
         cost = state.dot(self.Q).dot(state) + self.R * action**2
 
-        if not done:
-            reward = 1.0
-        elif self.steps_beyond_done is None:
-            # pole just fell!
-            self.steps_beyond_done = 0
-            reward = 1.0
-        else:
-            if self.steps_beyond_done == 0:
-                logger.warn("you are calling 'step()' even though this environment has already returned done = true. you should always call 'reset()' once you receive 'done = true' -- any further steps are undefined behavior.")
-            self.steps_beyond_done += 1
-            reward = 0.0
+        reward = 0.0
+        if idx == 1:
+            if not done:
+                reward = 1.0
+            elif self.steps_beyond_done is None:
+                # pole just fell!
+                self.steps_beyond_done = 0
+                reward = 1.0
+            elif idx == 1:
+                if self.steps_beyond_done == 0:
+                    logger.warn("you are calling 'step()' even though this environment has already returned done = true. you should always call 'reset()' once you receive 'done = true' -- any further steps are undefined behavior.")
+                self.steps_beyond_done += 1
 
-        return state, reward, done, {}, cost
+        return state, reward, done, {"push": push,
+                                    "disturbance": self.disturbance,
+                                    "cost": cost}
 
     def reset(self, d=0.5):
         self.state[0] = self.np_random.uniform(low=-d, high=d, size=(4,))
         self.state[1] = np.array(self.state[0])
         self.steps_beyond_done = None
-        return np.array(self.state[0])
+        return np.array(self.state[1])
 
     def render(self, mode='human', takeover=False):
         screen_width = 600

@@ -117,7 +117,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 # Take deterministic actions at test time (noise_scale=0)
                 test_env.render()
                 a = get_action(o, 0)
-                o, r, d, _, c = test_env.step(a + 0.5 * np.random.rand())
+                o, r, d, _, c = test_env.step(a + 0.5 * np.random.rand(), 1)
                 ep_ret += (r - c)
                 ep_len += 1
                 ep_cost += c
@@ -130,7 +130,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     for t in range(start_steps):
         a = env.action_space.sample()
-        o2, r, d, _, c = env.step(a)
+        o2, r, d, _, c = env.step(a, 1)
         r -= c
         replay_buffer.store(o, a, r, o2, d)
         o = o2
@@ -149,7 +149,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         a = get_action(o, act_noise)
 
         # Step the env
-        o2, r, d, _, c = env.step(a)
+        o2, r, d, _, c = env.step(a, 1)
         r -= c
         ep_ret += r
         ep_len += 1
@@ -176,11 +176,10 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             for _ in range(max_ep_len):
                 batch = replay_buffer.sample_batch(batch_size)
                 feed_dict = {x_ph: batch['obs1'],
-                            x2_ph: batch['obs2'],
-                            a_ph: batch['acts'],
-                            r_ph: batch['rews'],
-                            d_ph: batch['done']
-                            }
+                             x2_ph: batch['obs2'],
+                             a_ph: batch['acts'],
+                             r_ph: batch['rews'],
+                             d_ph: batch['done']}
 
                 # Q-learning update
                 outs = sess.run([q_loss, q, train_q_op], feed_dict)
@@ -208,7 +207,7 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str, default='ddpg')
     args = parser.parse_args()
 
-    from cartpole_continuous import ContinuousCartPoleEnv
+    from cartpole_continuous_double import ContinuousCartPoleEnv
 
     ddpg(lambda : ContinuousCartPoleEnv(), actor_critic=core.mlp_actor_critic,
          ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
