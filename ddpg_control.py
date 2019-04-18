@@ -117,9 +117,10 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def test_agent(n=5):
         tot_len, tot_ret = 0, 0
+        cost, cost_ctrl = 0, 0
         for j in range(n):
             o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-            o_ctrl, cost_ctrl = np.array(o), 0
+            o_ctrl = np.array(o)
             while not (d or (ep_len == 5*max_ep_len)):
                 # Take deterministic actions at test time (noise_scale=0)
                 test_env.render()
@@ -128,13 +129,12 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 cost_ctrl += info["cost"]
                 a = get_action(o, 0)
                 o, r, d, info = test_env.step(a, 1)
-                ep_ret += (r - info["cost"])
+                cost += info["cost"]
                 ep_len += 1
             tot_len += ep_len
-            tot_ret += ep_ret
         test_env.close()
         print("\n avg reward {:.5} and episode length {} over {} trials, cost/step rl/lqr {:.5}/{:.5}".
-              format(tot_ret/n, tot_len/n, n, (tot_len - tot_ret) / tot_len, cost_ctrl / tot_len))
+              format((tot_len - cost)/n, tot_len/n, n, cost / tot_len, cost_ctrl / tot_len))
 
     o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
     o_ctrl = np.array(o)#env.state[0]
@@ -151,8 +151,8 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     fails = 0
     takeover = False
-    cost = 0
-    cost_ctrl = 0
+    cost, ep_cost = 0, 0
+    cost_ctrl, ep_cost_ctrl = 0, 0
     retrain_steps = 0
 
     # Setup plotting
@@ -174,16 +174,18 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         from a uniform distribution for better exploration. Afterwards,
         use the learned policy (with some noise, via act_noise).
         """
-        env.render(takeover=takeover)
+        #env.render(takeover=takeover)
 
         # Step lqr
         a_ctrl = np.array([ctrl_pol.predict(o_ctrl)])
         o_ctrl, _, _, info = env.step(a_ctrl, 0)
         cost_ctrl += info["cost"]
+        ep_cost_ctrl += info["cost"]
 
         # Step ddpg
-        scaler = 1 / (1 + np.exp(start_steps - t))
+        scaler = 1 / (1 + np.exp(-t / 10000))
         takeover = np.abs(o[2]) > 0.25 * scaler or np.abs(o[0]) > 1 * scaler
+        takeover = False
         if takeover:
             a = np.array([ctrl_pol.predict(o)])
         else:
@@ -191,6 +193,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         o2, r, d, info = env.step(a, 1)
 
         cost += info["cost"]
+        ep_cost += info["cost"]
         r -= info["cost"]
         ep_ret += r
         ep_len += 1
@@ -199,17 +202,18 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
         # that isn't based on the agent's state)
-        d = False if t==max_ep_len else d
+        # d = False if t==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(o, a, r, o2, takeover or d)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
 
-        print("\rSteps {:5}, fails {:3}, cost/step {:7.2}, ep_len {:5}, disturbance {:6.3}   "
-              .format(t, fails, cost/(t % max_ep_len), ep_len, info["disturbance"] if info["push"] else 0.0), end="")
+        print("\rSteps {:5}, fails {:3}, ep_len {:5}, disturbance {:7.3}, cost rl/lqr {:7.3}/{:7.3}"
+              .format(t, fails, ep_len, info["disturbance"] if info["push"] else 0.0,
+                      ep_cost/retrain_steps, ep_cost_ctrl/retrain_steps), end="")
 
         if np.random.rand() * max_ep_len < 1:
             """
@@ -264,7 +268,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             env.state[0] = np.array(env.state[1])
             o_ctrl = env.state[0]
         if d:
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            o, r, d, ep_ret, ep_len, ep_cost, ep_cost_ctrl = env.reset(), 0, False, 0, 0, 0, 0
             o_ctrl = np.array(o)
             fails += 1
             print()
