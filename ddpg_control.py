@@ -183,9 +183,9 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         cost_ctrl += info["cost"]
 
         # Step ddpg
-        scaler = 1 / (0.1 + np.exp(-t / 50000))
-        takeover = np.abs(o[2]) > 0.1 * scaler or np.abs(o[0]) > 0.3 * scaler
-        takeover = False
+        scaler = min(1, 0.1 + t / 100000)
+        takeover = np.abs(o[2]) > 0.5 * scaler or np.abs(o[0]) > 0.7 * scaler
+        # takeover = False
         if takeover:
             a = np.array([ctrl_pol.predict(o)])
         else:
@@ -203,7 +203,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # d = False if t==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, takeover or d)
+        replay_buffer.store(o, a, r, o2, d)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
