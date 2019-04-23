@@ -151,21 +151,21 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     fails = 0
     takeover = False
-    cost, ep_cost = 0, 0
-    cost_ctrl, ep_cost_ctrl = 0, 0
+    cost, cost_ctrl = 0, 0
     retrain_steps = 0
+    show = False
 
     # Setup plotting
-    plt.ion()
-    fig, ax = plt.subplots()
-    plot = ax.scatter([], [])
-    plot_ctrl = ax.scatter([], [])
-    plot_act = ax.scatter([], [])
-    plot_ctrl_act = ax.scatter([], [])
-    ax.legend(["ddpg cost", "lqr cost", "ddpg a", "lqr a"])
-    ax.set_xlabel("time")
-    ax.set_ylabel("cost and action")
-    ax.set_ylim(0, 3)
+    # times = []
+    # plt.ion()
+    # fig, ax = plt.subplots()
+    # plot = ax.plot([], [])
+    # costs = []
+    # plot_ctrl = ax.plot([], [])
+    # ctrl_costs = []
+    # ax.legend(["ddpg cost", "lqr cost"])
+    # ax.set_xlabel("time")
+    # ax.set_ylabel("cost")
 
     # Main loop: collect experience in env and update/log each epoch
     for t in itertools.count():
@@ -174,17 +174,17 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         from a uniform distribution for better exploration. Afterwards,
         use the learned policy (with some noise, via act_noise).
         """
-        #env.render(takeover=takeover)
+        if show > 0:
+            env.render(takeover=takeover)
 
         # Step lqr
         a_ctrl = np.array([ctrl_pol.predict(o_ctrl)])
         o_ctrl, _, _, info = env.step(a_ctrl, 0)
         cost_ctrl += info["cost"]
-        ep_cost_ctrl += info["cost"]
 
         # Step ddpg
-        scaler = 1 / (1 + np.exp(-t / 10000))
-        takeover = np.abs(o[2]) > 0.25 * scaler or np.abs(o[0]) > 1 * scaler
+        scaler = 1 / (0.1 + np.exp(-t / 50000))
+        takeover = np.abs(o[2]) > 0.1 * scaler or np.abs(o[0]) > 0.3 * scaler
         takeover = False
         if takeover:
             a = np.array([ctrl_pol.predict(o)])
@@ -193,11 +193,9 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         o2, r, d, info = env.step(a, 1)
 
         cost += info["cost"]
-        ep_cost += info["cost"]
         r -= info["cost"]
-        ep_ret += r
-        ep_len += 1
         retrain_steps += 1
+        ep_len += 1
 
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
@@ -213,7 +211,7 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
         print("\rSteps {:5}, fails {:3}, ep_len {:5}, disturbance {:7.3}, cost rl/lqr {:7.3}/{:7.3}"
               .format(t, fails, ep_len, info["disturbance"] if info["push"] else 0.0,
-                      ep_cost/retrain_steps, ep_cost_ctrl/retrain_steps), end="")
+                      cost/retrain_steps, cost_ctrl/retrain_steps), end="")
 
         if np.random.rand() * max_ep_len < 1:
             """
@@ -234,49 +232,37 @@ def ddpg(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 # Policy update
                 outs = sess.run([pi_loss, train_pi_op, target_update], feed_dict)
 
-            cost /= retrain_steps
-            cost_ctrl /= retrain_steps
+            # cost /= retrain_steps
+            # cost_ctrl /= retrain_steps
 
-            point = np.array([0.02 * (t + start_steps), cost]).reshape((1, 2))
-            array = plot.get_offsets()
-            array = np.append(array, point, axis=0)
-            plot.set_offsets(array)
+            # costs.append(cost)
+            # ctrl_costs.append(cost_ctrl)
+            # times.append(0.02 * (t + start_steps))
 
-            point = np.array([0.02 * (t + start_steps), cost_ctrl]).reshape((1, 2))
-            array = plot_ctrl.get_offsets()
-            array = np.append(array, point, axis=0)
-            plot_ctrl.set_offsets(array)
+            # ax.plot(times, costs, 'r-', times, ctrl_costs, 'b--')
 
-            point = np.array([0.02 * (t + start_steps), np.abs(a_ctrl)]).reshape((1, 2))
-            array = plot_act.get_offsets()
-            array = np.append(array, point, axis=0)
-            plot_act.set_offsets(array)
-
-            point = np.array([0.02 * (t + start_steps), np.abs(a)]).reshape((1, 2))
-            array = plot_ctrl_act.get_offsets()
-            array = np.append(array, point, axis=0)
-            plot_ctrl_act.set_offsets(array)
-
-            ax.set_xlim(0.02 * start_steps, 10 * np.ceil(0.002 * (t + start_steps + 1)))
-            fig.canvas.draw()
-            plt.pause(0.005)
+            # fig.canvas.draw()
+            # plt.pause(0.005)
 
             cost = 0
             cost_ctrl = 0
             retrain_steps = 0
 
+            show -= 1
+
             env.state[0] = np.array(env.state[1])
             o_ctrl = env.state[0]
+            print()
         if d:
-            o, r, d, ep_ret, ep_len, ep_cost, ep_cost_ctrl = env.reset(), 0, False, 0, 0, 0, 0
+            o, r, d, ep_len = env.reset(), 0, False, 0
             o_ctrl = np.array(o)
             fails += 1
-            print()
 
     # End of epoch wrap-up
         if t > 0 and t % (show_steps * max_ep_len) == 0:
             # Test the performance of the deterministic version of the agent.
             test_agent()
+            show = 5
 
 
 if __name__ == '__main__':
